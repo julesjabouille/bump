@@ -1,6 +1,6 @@
 # Bump chart (GitHub Pages)
 
-Outil web pour visualiser l’évolution de classements à partir d’un CSV, avec export PNG/PDF. Interface au **[DSFR](https://www.systeme-de-design.gouv.fr/)** (Système de design de l’État). **Aucune donnée n’est envoyée sur un serveur** : tout se fait dans le navigateur.
+Outil web pour visualiser l’évolution de classements à partir d’un CSV, avec export PNG/PDF.
 
 ## Parcours utilisateur
 
