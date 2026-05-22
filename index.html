@@ -50,7 +50,11 @@
     .axis text { font-size: 12px; fill: var(--text-mention-grey); font-family: Marianne, arial, sans-serif; }
     .axis line, .axis path { stroke: var(--border-default-grey); }
     .grid line { stroke: var(--border-default-grey); stroke-opacity: 0.8; }
-    .line { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .line {
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     .line.dim { opacity: 0.12; }
     .dot { stroke: var(--background-default-grey); }
     .label {
@@ -194,6 +198,7 @@
           <p class="fr-callout__text fr-mb-0">
             Colonne&nbsp;1&nbsp;: nom. Colonnes suivantes&nbsp;: position par temporalité.
             Première ligne&nbsp;: libellés des périodes (<code>2020</code>, <code>2021</code>…).
+            Cellule vide&nbsp;: donnée manquante — la courbe descend et remonte en arc harmonieux sous le graphique.
           </p>
         </div>
 
@@ -416,6 +421,7 @@ Candidat J,10,10,10,10,10,10`;
     const MARGIN = { top: 32, rightMin: 80, bottom: 44, leftMin: 56 };
     const LINE_GAP = 4;
     const LABEL_GAP = 4;
+    const OFF_CHART_PAD = 48;
     const MAX_LOGO_BYTES = 512 * 1024;
     const EXPORT_SCALE = 2;
 
@@ -648,6 +654,52 @@ Candidat J,10,10,10,10,10,10`;
       return y - sz / 2;
     }
 
+    /** Trou de données : point bas au centre de la période manquante, courbe lissée entre les rangs. */
+    function buildLinePoints(timeLabels, ranks, xScale, yScale, innerH) {
+      const yOut = innerH + OFF_CHART_PAD;
+      const points = [];
+
+      const pushLowPoint = (xLeft, xRight) => {
+        const xLow = (xLeft + xRight) / 2;
+        const last = points[points.length - 1];
+        if (!last || last.x !== xLow || last.y !== yOut) {
+          points.push({ x: xLow, y: yOut });
+        }
+      };
+
+      for (let i = 0; i < timeLabels.length; i++) {
+        const rank = ranks[i];
+        if (rank == null || !Number.isFinite(rank)) continue;
+
+        const px = xScale(timeLabels[i]);
+        const py = yScale(rank);
+
+        if (i > 0 && ranks[i - 1] == null) {
+          let prev = i - 1;
+          while (prev >= 0 && ranks[prev] == null) prev--;
+          if (prev >= 0) {
+            pushLowPoint(xScale(timeLabels[prev]), px);
+          }
+        }
+
+        points.push({ x: px, y: py });
+
+        if (i < timeLabels.length - 1 && ranks[i + 1] == null) {
+          let next = i + 1;
+          while (next < timeLabels.length && ranks[next] == null) next++;
+          if (next < timeLabels.length && ranks[next] != null) {
+            pushLowPoint(px, xScale(timeLabels[next]));
+          }
+        }
+      }
+
+      return points;
+    }
+
+    function validPoints(values) {
+      return values.filter((v) => v.rank != null && Number.isFinite(v.rank));
+    }
+
     function appendSeriesLabelText(parent, x, y, anchor, text) {
       const el = parent
         .append("text")
@@ -838,9 +890,8 @@ Candidat J,10,10,10,10,10,10`;
 
       const series = entities.map((d) => ({
         name: d.name,
-        values: timeLabels
-          .map((t, i) => ({ time: t, rank: d.ranks[i] }))
-          .filter((v) => v.rank != null),
+        ranks: d.ranks,
+        values: timeLabels.map((t, i) => ({ time: t, rank: d.ranks[i] })),
       }));
 
       g.append("g")
@@ -866,12 +917,7 @@ Candidat J,10,10,10,10,10,10`;
             .tickFormat((d) => (Number.isInteger(d) ? d : ""))
         );
 
-      const lineGen = d3
-        .line()
-        .defined((d) => d.rank != null)
-        .x((d) => x(d.time))
-        .y((d) => y(d.rank))
-        .curve(d3.curveMonotoneX);
+      const lineGenBase = d3.line().x((d) => d.x).y((d) => d.y);
 
       const lines = g
         .append("g")
@@ -881,14 +927,19 @@ Candidat J,10,10,10,10,10,10`;
         .join("path")
         .attr("class", "line")
         .attr("data-name", (d) => d.name)
-        .attr("d", (d) => lineGen(d.values))
+        .attr("d", (d) => {
+          const pts = buildLinePoints(timeLabels, d.ranks, x, y, innerH);
+          return lineGenBase.curve(d3.curveMonotoneX)(pts);
+        })
         .attr("stroke", (d) => colorFn(d.name))
-        .attr("stroke-width", sw);
+        .attr("stroke-width", sw)
+        .attr("stroke-linecap", "round")
+        .attr("stroke-linejoin", "round");
 
       g.append("g")
         .attr("class", "dots")
         .selectAll("circle")
-        .data(series.flatMap((s) => s.values.map((v) => ({ ...v, name: s.name }))))
+        .data(series.flatMap((s) => validPoints(s.values).map((v) => ({ ...v, name: s.name }))))
         .join("circle")
         .attr("class", "dot")
         .attr("data-name", (d) => d.name)
@@ -900,7 +951,7 @@ Candidat J,10,10,10,10,10,10`;
 
       if (state.showAmounts) {
         const valuePoints = series.flatMap((s) =>
-          s.values
+          validPoints(s.values)
             .map((v) => ({
               name: s.name,
               time: v.time,
@@ -926,8 +977,9 @@ Candidat J,10,10,10,10,10,10`;
 
       const labelG = g.append("g").attr("class", "labels");
       series.forEach((s) => {
-        const first = s.values[0];
-        const last = s.values[s.values.length - 1];
+        const valid = validPoints(s.values);
+        const first = valid[0];
+        const last = valid[valid.length - 1];
         if (first) {
           appendLabelWithLogo(labelG, s.name, s.name, x(first.time), y(first.rank), "start");
         }
